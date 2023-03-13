@@ -89,7 +89,7 @@ func (r *Renderer) open(f string) (io.ReadCloser, error) {
 	return os.Open(f)
 }
 
-func (r *Renderer) getTileImage(tile *tiled.LayerTile) (image.Image, error) {
+func (r *Renderer) GetTileImage(tile *tiled.LayerTile) (image.Image, error) {
 	timg, ok := r.tileCache[tile.Tileset.FirstGID+tile.ID]
 	if ok {
 		return r.engine.RotateTileImage(tile, timg), nil
@@ -156,7 +156,7 @@ func (r *Renderer) _renderLayer(layer *tiled.Layer) error {
 				continue
 			}
 
-			img, err := r.getTileImage(layer.Tiles[i])
+			img, err := r.GetTileImage(layer.Tiles[i])
 			if err != nil {
 				return err
 			}

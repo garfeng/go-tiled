@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"math"
 	"sort"
 )
 
@@ -86,7 +87,7 @@ func (r *Renderer) _renderObjectGroup(objectGroup *tiled.ObjectGroup) error {
 	objs := objectGroup.Objects
 	objs = SortAny(objs, sortObjs)
 	for _, obj := range objs {
-		err := r.renderOneObject(objectGroup, obj)
+		err := r.renderOneObjectUpperTile(objectGroup, obj)
 		if err != nil {
 			return err
 		}
@@ -99,6 +100,60 @@ func (r *Renderer) RenderGroupObjectGroup(groupIdx, objectGroupId int) error {
 	group := r.m.Groups[groupIdx]
 	layer := group.ObjectGroups[objectGroupId]
 	return r._renderObjectGroup(layer)
+}
+
+func (r *Renderer) renderOneObjectUpperTile(layer *tiled.ObjectGroup, o *tiled.Object) error {
+	if !o.Visible {
+		return nil
+	}
+
+	if o.GID == 0 {
+		// TODO: o.GID == 0
+		return nil
+	}
+
+	tile, err := r.m.TileGIDToTile(o.GID)
+	if err != nil {
+		return err
+	}
+
+	img, err := r.GetTileImage(tile)
+	if err != nil {
+		return err
+	}
+
+	bounds := img.Bounds()
+	srcSize := bounds.Size()
+	dstSize := image.Pt(int(o.Width), int(o.Height))
+
+	if !srcSize.Eq(dstSize) {
+		img = imaging.Resize(img, dstSize.X, dstSize.Y, imaging.NearestNeighbor)
+	}
+
+	if o.Rotation != 0 {
+		img = imaging.Rotate(img, -o.Rotation, color.RGBA{})
+	}
+
+	n := math.Floor(o.Y / float64(r.m.TileHeight))
+	upperY := n * float64(r.m.TileHeight)
+	leftTop := o.Y - o.Height
+
+	upperHeight := upperY - leftTop
+
+	bounds = img.Bounds()
+	bounds.Max.Y = int(upperHeight)
+
+	pos := bounds.Add(image.Pt(int(o.X), int(leftTop)))
+
+	if layer.Opacity < 1 {
+		mask := image.NewUniform(color.Alpha{uint8(layer.Opacity * 255)})
+
+		draw.DrawMask(r.Result, pos, img, img.Bounds().Min, mask, mask.Bounds().Min, draw.Over)
+	} else {
+		draw.Draw(r.Result, pos, img, img.Bounds().Min, draw.Over)
+	}
+
+	return nil
 }
 
 func (r *Renderer) renderOneObject(layer *tiled.ObjectGroup, o *tiled.Object) error {
@@ -116,7 +171,7 @@ func (r *Renderer) renderOneObject(layer *tiled.ObjectGroup, o *tiled.Object) er
 		return err
 	}
 
-	img, err := r.getTileImage(tile)
+	img, err := r.GetTileImage(tile)
 	if err != nil {
 		return err
 	}
