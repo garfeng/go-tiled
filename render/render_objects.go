@@ -1,13 +1,37 @@
+/*
+Copyright (c) 2017 Lauris Bukšis-Haberkorns <lauris@nix.lv>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
 package render
 
 import (
-	"github.com/disintegration/imaging"
-	"github.com/lafriks/go-tiled"
 	"image"
 	"image/color"
 	"image/draw"
 	"math"
-	"sort"
+
+	"github.com/lafriks/go-tiled"
+	"github.com/lafriks/go-tiled/internal/utils"
+
+	"github.com/disintegration/imaging"
 )
 
 // RenderVisibleGroups renders all visible groups
@@ -16,14 +40,20 @@ func (r *Renderer) RenderVisibleGroups() error {
 		if !group.Visible {
 			continue
 		}
-		r._renderGroup(group)
+		if err := r._renderGroup(group); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // RenderGroup renders single group.
-func (r *Renderer) RenderGroup(groupIdx int) error {
-	group := r.m.Groups[groupIdx]
+func (r *Renderer) RenderGroup(groupID int) error {
+	if groupID >= len(r.m.Groups) {
+		return ErrOutOfBounds
+	}
+
+	group := r.m.Groups[groupID]
 	return r._renderGroup(group)
 }
 
@@ -32,8 +62,7 @@ func (r *Renderer) _renderGroup(group *tiled.Group) error {
 		if !layer.Visible {
 			continue
 		}
-		err := r._renderLayer(layer)
-		if err != nil {
+		if err := r._renderLayer(layer); err != nil {
 			return err
 		}
 	}
@@ -42,8 +71,7 @@ func (r *Renderer) _renderGroup(group *tiled.Group) error {
 		if !objectGroup.Visible {
 			continue
 		}
-		err := r._renderObjectGroup(objectGroup)
-		if err != nil {
+		if err := r._renderObjectGroup(objectGroup); err != nil {
 			return err
 		}
 	}
@@ -57,8 +85,7 @@ func (r *Renderer) _renderGroup(group *tiled.Group) error {
 func (r *Renderer) RenderVisibleLayersAndObjectGroups() error {
 	// TODO: The order maybe incorrect
 
-	err := r.RenderVisibleLayers()
-	if err != nil {
+	if err := r.RenderVisibleLayers(); err != nil {
 		return err
 	}
 	return r.RenderVisibleObjectGroups()
@@ -67,11 +94,11 @@ func (r *Renderer) RenderVisibleLayersAndObjectGroups() error {
 // RenderVisibleObjectGroups renders all visible object groups
 func (r *Renderer) RenderVisibleObjectGroups() error {
 	for i, layer := range r.m.ObjectGroups {
-		if layer.Visible {
-			err := r.RenderObjectGroup(i)
-			if err != nil {
-				return err
-			}
+		if !layer.Visible {
+			continue
+		}
+		if err := r.RenderObjectGroup(i); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -79,16 +106,28 @@ func (r *Renderer) RenderVisibleObjectGroups() error {
 
 // RenderObjectGroup renders a single object group
 func (r *Renderer) RenderObjectGroup(i int) error {
+	if i >= len(r.m.ObjectGroups) {
+		return ErrOutOfBounds
+	}
+
 	layer := r.m.ObjectGroups[i]
 	return r._renderObjectGroup(layer)
 }
 
 func (r *Renderer) _renderObjectGroup(objectGroup *tiled.ObjectGroup) error {
 	objs := objectGroup.Objects
-	objs = SortAny(objs, sortObjs)
+
+	// sort objects from left top to right down
+	objs = utils.SortAnySlice(objs, func(a, b *tiled.Object) bool {
+		if a.Y != b.Y {
+			return a.Y < b.Y
+		}
+
+		return a.X < b.X
+	})
+
 	for _, obj := range objs {
-		err := r.renderOneObjectUpperTile(objectGroup, obj)
-		if err != nil {
+		if err := r.renderOneObject(objectGroup, obj); err != nil {
 			return err
 		}
 	}
@@ -96,9 +135,18 @@ func (r *Renderer) _renderObjectGroup(objectGroup *tiled.ObjectGroup) error {
 }
 
 // RenderGroupObjectGroup renders single object group in a certain group.
-func (r *Renderer) RenderGroupObjectGroup(groupIdx, objectGroupId int) error {
-	group := r.m.Groups[groupIdx]
-	layer := group.ObjectGroups[objectGroupId]
+func (r *Renderer) RenderGroupObjectGroup(groupID, objectGroupID int) error {
+	if groupID >= len(r.m.Groups) {
+		return ErrOutOfBounds
+	}
+
+	group := r.m.Groups[groupID]
+
+	if objectGroupID >= len(group.ObjectGroups) {
+		return ErrOutOfBounds
+	}
+
+	layer := group.ObjectGroups[objectGroupID]
 	return r._renderObjectGroup(layer)
 }
 
@@ -171,7 +219,7 @@ func (r *Renderer) renderOneObject(layer *tiled.ObjectGroup, o *tiled.Object) er
 		return err
 	}
 
-	img, err := r.GetTileImage(tile)
+	img, err := r.getTileImage(tile)
 	if err != nil {
 		return err
 	}
@@ -184,12 +232,12 @@ func (r *Renderer) renderOneObject(layer *tiled.ObjectGroup, o *tiled.Object) er
 		img = imaging.Resize(img, dstSize.X, dstSize.Y, imaging.NearestNeighbor)
 	}
 
-	if o.Rotation != 0 {
-		img = imaging.Rotate(img, -o.Rotation, color.RGBA{})
-	}
+	var originPoint image.Point
+
+	img, originPoint = r._rotateObjectImage(img, o.Rotation)
 
 	bounds = img.Bounds()
-	pos := bounds.Add(image.Pt(int(o.X), int(o.Y-o.Height)))
+	pos := bounds.Add(image.Pt(int(o.X), int(o.Y)).Sub(originPoint))
 
 	if layer.Opacity < 1 {
 		mask := image.NewUniform(color.Alpha{uint8(layer.Opacity * 255)})
@@ -202,38 +250,39 @@ func (r *Renderer) renderOneObject(layer *tiled.ObjectGroup, o *tiled.Object) er
 	return nil
 }
 
-func sortObjs(a, b *tiled.Object) bool {
-	if a.Y != b.Y {
-		return a.Y < b.Y
+func (r *Renderer) _rotateObjectImage(img image.Image, rotation float64) (newImage image.Image, originPoint image.Point) {
+	bounds := img.Bounds()
+	w := bounds.Dx()
+	h := bounds.Dy()
+	points := []image.Point{
+		image.Pt(0, 0),
+		image.Pt(w-1, 0),
+		image.Pt(w-1, h-1),
+		image.Pt(0, h-1),
 	}
 
-	return a.X < b.X
-}
+	sin, cos := math.Sincos(math.Pi * rotation / 180)
 
-func SortAny[T any](data []T, lessMethod func(a, b T) bool) []T {
-	s := &Sortable[T]{
-		Data:       data,
-		LessMethod: lessMethod,
+	rotatedPointsX := []float64{}
+	rotatedPointsY := []float64{}
+
+	for _, p := range points {
+		x := float64(p.X)
+		y := float64(p.Y)
+
+		rotatedPointsX = append(rotatedPointsX, x*cos-y*sin)
+		rotatedPointsY = append(rotatedPointsY, x*sin+y*cos)
 	}
-	sort.Sort(s)
-	return s.Data
-}
 
-type Sortable[T any] struct {
-	Data       []T
-	LessMethod func(a, b T) bool
-}
+	rotatedMinX := rotatedPointsX[0]
+	rotatedMinY := rotatedPointsY[0]
 
-func (s *Sortable[T]) Swap(i, j int) {
-	tmp := (s.Data)[i]
-	(s.Data)[i] = (s.Data)[j]
-	(s.Data)[j] = tmp
-}
+	for i := 1; i < 4; i++ {
+		rotatedMinX = math.Min(rotatedMinX, rotatedPointsX[i])
+		rotatedMinY = math.Min(rotatedMinY, rotatedPointsY[i])
+	}
 
-func (s *Sortable[T]) Less(i, j int) bool {
-	return s.LessMethod(s.Data[i], s.Data[j])
-}
+	originPoint = image.Pt(int(rotatedPointsX[3]-rotatedMinX), int(rotatedPointsY[3]-rotatedMinY))
 
-func (s *Sortable[T]) Len() int {
-	return len(s.Data)
+	return imaging.Rotate(img, -rotation, color.RGBA{}), originPoint
 }
