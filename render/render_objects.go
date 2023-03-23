@@ -114,6 +114,46 @@ func (r *Renderer) RenderObjectGroup(i int) error {
 	return r._renderObjectGroup(layer)
 }
 
+func (r *Renderer) RenderLowerObjectGroup(objectGroup *tiled.ObjectGroup) error {
+	objs := objectGroup.Objects
+
+	// sort objects from left top to right down
+	objs = utils.SortAnySlice(objs, func(a, b *tiled.Object) bool {
+		if a.Y != b.Y {
+			return a.Y < b.Y
+		}
+
+		return a.X < b.X
+	})
+
+	for _, obj := range objs {
+		if err := r.renderOneObjectLowerTile(objectGroup, obj); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Renderer) RenderUpperObjectGroup(objectGroup *tiled.ObjectGroup) error {
+	objs := objectGroup.Objects
+
+	// sort objects from left top to right down
+	objs = utils.SortAnySlice(objs, func(a, b *tiled.Object) bool {
+		if a.Y != b.Y {
+			return a.Y < b.Y
+		}
+
+		return a.X < b.X
+	})
+
+	for _, obj := range objs {
+		if err := r.renderOneObjectUpperTile(objectGroup, obj); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Renderer) _renderObjectGroup(objectGroup *tiled.ObjectGroup) error {
 	objs := objectGroup.Objects
 
@@ -178,20 +218,25 @@ func (r *Renderer) renderOneObjectUpperTile(layer *tiled.ObjectGroup, o *tiled.O
 		img = imaging.Resize(img, dstSize.X, dstSize.Y, imaging.NearestNeighbor)
 	}
 
-	if o.Rotation != 0 {
-		img = imaging.Rotate(img, -o.Rotation, color.RGBA{})
-	}
+	var originPoint image.Point
 
-	n := math.Floor(o.Y / float64(r.m.TileHeight))
-	upperY := n * float64(r.m.TileHeight)
-	leftTop := o.Y - o.Height
-
-	upperHeight := upperY - leftTop
+	img, originPoint = r._rotateObjectImage(img, o.Rotation)
 
 	bounds = img.Bounds()
-	bounds.Max.Y = int(upperHeight)
+	pos := bounds.Add(image.Pt(int(o.X), int(o.Y))).Sub(originPoint)
 
-	pos := bounds.Add(image.Pt(int(o.X), int(leftTop)))
+	n := math.Floor(float64(pos.Max.Y)/float64(r.m.TileHeight)) - 1
+	upperY := n * float64(r.m.TileHeight)
+
+	upperHeight := upperY - float64(pos.Min.Y)
+
+	if upperHeight <= 0 {
+		return nil
+	}
+
+	//bounds.Max.Y = int(upperHeight)
+
+	pos.Max.Y = pos.Min.Y + int(upperHeight)
 
 	if layer.Opacity < 1 {
 		mask := image.NewUniform(color.Alpha{uint8(layer.Opacity * 255)})
@@ -199,6 +244,73 @@ func (r *Renderer) renderOneObjectUpperTile(layer *tiled.ObjectGroup, o *tiled.O
 		draw.DrawMask(r.Result, pos, img, img.Bounds().Min, mask, mask.Bounds().Min, draw.Over)
 	} else {
 		draw.Draw(r.Result, pos, img, img.Bounds().Min, draw.Over)
+	}
+
+	return nil
+}
+
+func (r *Renderer) renderOneObjectLowerTile(layer *tiled.ObjectGroup, o *tiled.Object) error {
+	if !o.Visible {
+		return nil
+	}
+
+	if o.GID == 0 {
+		// TODO: o.GID == 0
+		return nil
+	}
+
+	tile, err := r.m.TileGIDToTile(o.GID)
+	if err != nil {
+		return err
+	}
+
+	img, err := r.GetTileImage(tile)
+	if err != nil {
+		return err
+	}
+
+	bounds := img.Bounds()
+	srcSize := bounds.Size()
+	dstSize := image.Pt(int(o.Width), int(o.Height))
+
+	if !srcSize.Eq(dstSize) {
+		img = imaging.Resize(img, dstSize.X, dstSize.Y, imaging.NearestNeighbor)
+	}
+
+	var originPoint image.Point
+
+	img, originPoint = r._rotateObjectImage(img, o.Rotation)
+
+	bounds = img.Bounds()
+	pos := bounds.Add(image.Pt(int(o.X), int(o.Y))).Sub(originPoint)
+
+	n := math.Floor(float64(pos.Max.Y)/float64(r.m.TileHeight)) - 1
+	upperY := n * float64(r.m.TileHeight)
+
+	lowerHeight := float64(pos.Max.Y) - upperY
+
+	if lowerHeight <= 0 {
+		return nil
+	}
+
+	if lowerHeight >= float64(bounds.Dy()) {
+		lowerHeight = float64(bounds.Dy())
+	}
+
+	upperY = float64(pos.Max.Y) - lowerHeight
+
+	//bounds.Max.Y = int(upperHeight)
+
+	pos.Min.Y = int(upperY)
+
+	imgMin := img.Bounds().Min.Add(image.Pt(0, img.Bounds().Dy()-int(lowerHeight)))
+
+	if layer.Opacity < 1 {
+		mask := image.NewUniform(color.Alpha{uint8(layer.Opacity * 255)})
+
+		draw.DrawMask(r.Result, pos, img, imgMin, mask, mask.Bounds().Min, draw.Over)
+	} else {
+		draw.Draw(r.Result, pos, img, imgMin, draw.Over)
 	}
 
 	return nil
@@ -219,7 +331,7 @@ func (r *Renderer) renderOneObject(layer *tiled.ObjectGroup, o *tiled.Object) er
 		return err
 	}
 
-	img, err := r.getTileImage(tile)
+	img, err := r.GetTileImage(tile)
 	if err != nil {
 		return err
 	}
@@ -256,9 +368,9 @@ func (r *Renderer) _rotateObjectImage(img image.Image, rotation float64) (newIma
 	h := bounds.Dy()
 	points := []image.Point{
 		image.Pt(0, 0),
-		image.Pt(w-1, 0),
-		image.Pt(w-1, h-1),
-		image.Pt(0, h-1),
+		image.Pt(w, 0),
+		image.Pt(w, h),
+		image.Pt(0, h),
 	}
 
 	sin, cos := math.Sincos(math.Pi * rotation / 180)

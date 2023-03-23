@@ -48,3 +48,29 @@ func TestRenderer_RenderObjectGroup(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestRenderer_RenderUpperObjectGroup(t *testing.T) {
+	tiledMap, err := tiled.LoadFile("../assets/test_render_objects.tmx")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	renderer, err := NewRenderer(tiledMap)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	g := tiledMap.ObjectGroups[1]
+
+	//renderer.RenderVisibleLayers()
+	renderer.RenderUpperObjectGroup(g)
+
+	w, _ := os.Create("../assets/test_render_objects.png")
+	defer w.Close()
+
+	if err = renderer.SaveAsPng(w); err != nil {
+		t.Error(err)
+	}
+}
